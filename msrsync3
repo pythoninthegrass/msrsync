@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/usr/bin/env python
 
 # Copyright 2017 Jean-Baptiste Denis <jbd@jbdenis.net>
 
@@ -10,7 +9,6 @@
 # This file includes a copy of the BSD licensed options.py file from the bup project
 # See https://github.com/bup/bup/blob/master/lib/bup/options.py
 
-from __future__ import print_function
 VERSION = '20170730'
 
 """
@@ -30,10 +28,6 @@ Inspired by the fpsync tool from the fpart project. You should have a look since
 is much more powerful right now and has been used to move around terabytes
 of data already. See https://github.com/martymac/fpart
 """
-
-# TODO
-# - handle remote-shell src or dest dir, like a normal rsync
-# - verbose, debug, multiprocessing compliant output
 
 DEFAULT_RSYNC_OPTIONS = "-aS --numeric-ids"
 
@@ -89,8 +83,6 @@ TYPE_RSYNC_SENTINEL = 1
 MSG_STDERR = 10
 MSG_STDOUT = 11
 MSG_PROGRESS = 12
-
-# pylint: disable=wrong-import-position
 
 import os
 import sys
@@ -1332,333 +1324,20 @@ def _compare_trees(first, second):
     return first_list == second_list
 
 
-class TestHelpers(unittest.TestCase):
-    """
-    Test the various function helpers
-    """
-    # pylint: disable=too-many-public-methods
-    def test_get_human_size(self):
-        """ convert bytes to human readable string """
-        val = get_human_size(1024)
-        self.assertEqual(val, '1.0 K')
-
-    def test_get_human_size2(self):
-        """ convert bytes to human readable string """
-        val = get_human_size(1024*1024)
-        self.assertEqual(val, '1.0 M')
-
-    def test_human_size(self):
-        """ convert human readable size to bytes """
-        val = human_size("1024")
-        self.assertEqual(val, 1024)
-
-    def test_human_size2(self):
-        """ convert human readable size to bytes """
-        val = human_size("1M")
-        self.assertEqual(val, 1024*1024)
-
-    def test_human_size3(self):
-        """ wrongly formatted size """
-        val = human_size("10KK")
-        self.assertEqual(val, None)
-
-    def test_human_size4(self):
-        """ bad suffix  """
-        val = human_size("10Q")
-        self.assertEqual(val, None)
-
-
-class TestOptionsParser(unittest.TestCase):
-    """
-    Test the command line parsing
-    """
-    # pylint: disable=too-many-public-methods
-    def test_nooption(self):
-        """ parse cmdline without argument"""
-        try:
-            cmdline = shlex.split("msrsync")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_justrsync(self):
-        """ parse cmdline with only --rsync option"""
-        try:
-            cmdline = shlex.split("msrsync --rsync")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_badsize(self):
-        """ parse cmdline with a bad size"""
-        try:
-            cmdline = shlex.split("msrsync -s abcde src dest")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_badsize2(self):
-        """ parse cmdline with a bad size"""
-        try:
-            cmdline = shlex.split("msrsync -s abcde src dest")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-
-    def test_bad_filesnumber(self):
-        """ parse cmdline with a bad size"""
-        try:
-            cmdline = shlex.split("msrsync -f abcde src dest")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_only_src(self):
-        """ parse cmdline with only a source dir"""
-        try:
-            cmdline = shlex.split("msrsync src")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_src_dst(self):
-        """ test a basic and valid command line """
-        cmdline = shlex.split("msrsync src dst")
-        opt, srcs, dst = parse_cmdline(cmdline)
-        self.assertEqual(opt.rsync, DEFAULT_RSYNC_OPTIONS)
-        self.assertEqual(srcs, ["src"])
-        self.assertEqual(dst, "dst")
-
-    def test_src_multiple_dst(self):
-        """ test a command line with multiple sources """
-        cmdline = shlex.split("msrsync src1 src2 dst")
-        opt, srcs, dst = parse_cmdline(cmdline)
-        self.assertEqual(opt.rsync, DEFAULT_RSYNC_OPTIONS)
-        self.assertEqual(srcs, ["src1", "src2"])
-        self.assertEqual(dst, "dst")
-
-    def test_src_dst_rsync(self):
-        """ test a basic and valid command line with rsync option """
-        cmdline = shlex.split("""msrsync --rsync "--numeric-ids" src dst""")
-        opt, srcs, dst = parse_cmdline(cmdline)
-        self.assertEqual(opt.rsync, "--numeric-ids")
-        self.assertEqual(srcs, ["src"])
-        self.assertEqual(dst, "dst")
-
-    def test_src_multiple_dst_rsync(self):
-        """ test a command line with multiple sources """
-        cmdline = shlex.split("""msrsync --rsync "--numeric-ids" src1 src2 dst""")
-        opt, srcs, dst = parse_cmdline(cmdline)
-        self.assertEqual(opt.rsync, "--numeric-ids")
-        self.assertEqual(srcs, ["src1", "src2"])
-        self.assertEqual(dst, "dst")
-
-    def test_src_dest_empty_rsync(self):
-        """ test a basic and valid command line, but with empty rsync option """
-        try:
-            cmdline = shlex.split("msrsync --rsync src dst")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_rsync_delete(self):
-        """ command line with --rsync option that contains --delete """
-        try:
-            cmdline = shlex.split("""msrsync --rsync "--delete" dst""")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_rsync_delete2(self):
-        """ command line with --rsync option that contains --delete """
-        try:
-            cmdline = shlex.split("""msrsync --rsync "-a --numeric-ids --delete" src dst""")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-    def test_rsync_delete3(self):
-        """ command line with -r option that contains --delete """
-        try:
-            cmdline = shlex.split("""msrsync -r "-a --numeric-ids --delete" src dst""")
-            parse_cmdline(cmdline)
-        except SystemExit as err:
-            self.assertEqual(err.code, EOPTION_PARSER)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-
-class TestRsyncOptionsChecker(unittest.TestCase):
-    """
-    Test the rsync options checker
-    """
-    def setUp(self):
-        """ unittest setup """
-        _check_executables()
-
-    # pylint: disable=too-many-public-methods
-    def test_rsync_wrong_options(self):
-        """ test with wrong_options """
-        try:
-            rsync_options = "--this-is-fake"
-            _check_rsync_options(rsync_options)
-        except SystemExit as err:
-            self.assertEqual(err.code, ERSYNC_OPTIONS_CHECK)
-            return
-
-        self.fail("Should have raised a SystemExit exception")
-
-
-class TestSyncAPI(unittest.TestCase):
-    """
-    Test msrsync by directly calling python function
-    It is redondant with TestSyncCLI but it makes coverage.py happy =)
-    """
-
-    # pylint: disable=too-many-public-methods
-    def setUp(self):
-        """ create a temporary fake tree """
-        _check_executables()
-        self.src = tempfile.mkdtemp(prefix='msrsync_testsync_')
-        self.dst = tempfile.mkdtemp(prefix='msrsync_testsync_')
-        _create_fake_tree(self.src, total_entries=1234, max_entries_per_level=123, max_depth=5, files_pct=95)
-
-    def tearDown(self):
-        """ remove the temporary fake tree """
-        for path in self.src, self.dst:
-            if os.path.exists(path):
-                shutil.rmtree(path, onerror=rmtree_onerror)
-
-    def _msrsync_test_helper(self, options=""):
-        """ msrsync test helper """
-        cmdline = """msrsync %s %s %s""" % (options, self.src, self.dst)
-        main(shlex.split(cmdline))
-        self.assertTrue(_compare_trees(self.src, self.dst), "The source %s and destination %s tree are not equal." % (self.src, self.dst))
-
-    def test_simple_msrsync_api(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper()
-
-    def test_msrsync_api_2_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 2')
-
-    def test_msrsync_api_4_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 4')
-
-    def test_msrsync_api_8_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 8')
-
-
-
-class TestSyncCLI(unittest.TestCase):
-    """
-    Test the synchronisation process using the commmand line interface
-    """
-
-    # pylint: disable=too-many-public-methods
-    def setUp(self):
-        """ create a temporary fake tree """
-        _check_executables()
-        self.src = tempfile.mkdtemp(prefix='msrsync_testsync_')
-        self.dst = tempfile.mkdtemp(prefix='msrsync_testsync_')
-        _create_fake_tree(self.src, total_entries=1234, max_entries_per_level=123, max_depth=5, files_pct=95)
-
-    def tearDown(self):
-        """ remove the temporary fake tree """
-        for path in self.src, self.dst:
-            if os.path.exists(path):
-                shutil.rmtree(path, onerror=rmtree_onerror)
-
-    def _msrsync_test_helper(self, options=""):
-        """ msrsync test helper """
-        cmd = "%s %s %s %s %s" % (sys.executable, os.path.realpath(__file__), options, self.src + os.sep, self.dst)
-        ret, _, _, timeout, _ = run(cmd, timeout_sec=60)
-        self.assertTrue(not timeout, "The msrsync command has timeouted.")
-        self.assertEqual(ret, 0, "The msrsync command has failed: %s" % cmd)
-        self.assertTrue(_compare_trees(self.src, self.dst), "The source %s and destination %s tree are not equal." % (self.src, self.dst))
-
-
-    def test_simple_rsync(self):
-        """ test simple rsync synchronisation """
-        cmd = "%s %s %s %s" % (RSYNC_EXE, DEFAULT_RSYNC_OPTIONS, self.src + os.sep, self.dst)
-        ret, _, _, timeout, _ = run(cmd, timeout_sec=60)
-        self.assertTrue(not timeout, "The rsync command has timeouted.")
-        self.assertEqual(ret, 0, "The rsync command has failed.")
-        self.assertTrue(_compare_trees(self.src, self.dst), "The source and destination tree are not equal. %s %s" % (self.src, self.dst))
-
-    def test_simple_msrsync_cli(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper()
-
-    def test_simple_msrsync_progress_cli(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='--progress')
-
-    def test_msrsync_progress_cli_2_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='--progress -p 2')
-
-    def test_msrsync_cli_2_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 2')
-
-    def test_msrsync_cli_4_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 4')
-
-    def test_msrsync_cli_8_processes(self):
-        """ test simple msrsync synchronisation """
-        self._msrsync_test_helper(options='-p 8')
-
 
 def selftest():
     """
-    Embedded testing runner
+    Run tests from the tests directory
     """
-    suite = unittest.TestSuite()
-
-    tests = [TestHelpers, \
-             TestOptionsParser, \
-             TestRsyncOptionsChecker, \
-             TestSyncAPI, \
-             TestSyncCLI]
-
-    for test in tests:
-        suite.addTest(unittest.TestLoader().loadTestsFromTestCase(test))
-
-    unittest.TextTestRunner(verbosity=2).run(suite)
+    import subprocess
+    import sys
+    
+    test_runner_path = os.path.join(os.path.dirname(__file__), 'tests', 'run_tests.py')
+    if os.path.exists(test_runner_path):
+        subprocess.call([sys.executable, test_runner_path])
+    else:
+        print("Test runner not found at:", test_runner_path, file=sys.stderr)
+        print("Please run tests manually from the tests directory", file=sys.stderr)
 
 
 def _check_root(msg=None):
@@ -1782,9 +1461,6 @@ def benchshm(total_entries=10000, max_entries_per_level=128, max_depth=5, files_
 
 
 def main(cmdline):
-    """
-    main
-    """
     _check_python_version()
     options, srcs, dest = parse_cmdline(cmdline)
 
