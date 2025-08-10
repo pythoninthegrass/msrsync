@@ -119,9 +119,9 @@ def crawl(path, relative=False):
 
 def buckets(path, filesnr, size):
     bucket_files_nr = bucket_size = 0
-    bucket, base = [], Path(path).name
+    bucket, base = [], os.path.split(path)[1]
     for fsize, rpath in crawl(path, relative=True):
-        bucket.append(str(Path(base) / rpath.lstrip(os.sep)))
+        bucket.append(os.path.join(base, rpath.lstrip(os.sep)))
         bucket_files_nr += 1
         bucket_size += fsize
         if bucket_size >= size or bucket_files_nr >= filesnr:
