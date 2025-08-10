@@ -23,31 +23,37 @@ class TestSyncCLI:
     """
 
     def setup_method(self):
-        """ create a temporary fake tree """
+        """create a temporary fake tree"""
         _check_executables()
         self.src = tempfile.mkdtemp(prefix='msrsync_testsync_')
         self.dst = tempfile.mkdtemp(prefix='msrsync_testsync_')
         _create_fake_tree(self.src, total_entries=1234, max_entries_per_level=123, max_depth=5, files_pct=95)
 
     def teardown_method(self):
-        """ remove the temporary fake tree """
+        """remove the temporary fake tree"""
         for path in self.src, self.dst:
             if os.path.exists(path):
                 shutil.rmtree(path, onerror=rmtree_onerror)
 
     def _msrsync_test_helper(self, options=""):
-        """ msrsync test helper """
+        """msrsync test helper with improved error handling"""
         msrsync3_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "msrsync3")
         cmd = "%s %s %s %s %s" % (sys.executable, msrsync3_path, options, self.src + os.sep, self.dst)
-        ret, _, _, timeout, _ = run(cmd, timeout_sec=60)
-        assert not timeout, "The msrsync command has timeouted."
-        assert ret == 0, "The msrsync command has failed: %s" % cmd
-        assert _compare_trees(self.src, self.dst), "The source %s and destination %s tree are not equal." % (self.src, self.dst)
+        ret, _, stderr, timeout, _ = run(cmd, timeout_sec=60)
 
+        # Handle different error conditions properly
+        if timeout:
+            pytest.fail(f"The msrsync command timed out after 60 seconds: {cmd}")
+        elif ret == msrsync3.EMSRSYNC_INTERRUPTED:
+            pytest.skip("Test was interrupted by user signal")
+        elif ret != 0:
+            pytest.fail(f"The msrsync command failed with code {ret}: {cmd}\nStderr: {stderr}")
+
+        assert _compare_trees(self.src, self.dst), "The source %s and destination %s tree are not equal." % (self.src, self.dst)
 
     @pytest.mark.integration
     def test_simple_rsync(self):
-        """ test simple rsync synchronisation """
+        """test simple rsync synchronisation"""
         cmd = "%s %s %s %s" % (RSYNC_EXE, DEFAULT_RSYNC_OPTIONS, self.src + os.sep, self.dst)
         ret, _, _, timeout, _ = run(cmd, timeout_sec=60)
         assert not timeout, "The rsync command has timeouted."
@@ -56,32 +62,30 @@ class TestSyncCLI:
 
     @pytest.mark.integration
     def test_simple_msrsync_cli(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper()
 
     @pytest.mark.integration
     def test_simple_msrsync_progress_cli(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper(options='--progress')
 
     @pytest.mark.integration
     def test_msrsync_progress_cli_2_processes(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper(options='--progress -p 2')
 
     @pytest.mark.integration
     def test_msrsync_cli_2_processes(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper(options='-p 2')
 
     @pytest.mark.integration
     def test_msrsync_cli_4_processes(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper(options='-p 4')
 
     @pytest.mark.integration
     def test_msrsync_cli_8_processes(self):
-        """ test simple msrsync synchronisation """
+        """test simple msrsync synchronisation"""
         self._msrsync_test_helper(options='-p 8')
-
-

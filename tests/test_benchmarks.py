@@ -34,23 +34,25 @@ class TestBenchmarks:
     @pytest.mark.integration
     def test_check_root(self):
         """Test root check function"""
+
         # Function was removed from main script, so we test our own implementation
         def _check_root(msg=None):
             """Check if the caller is running under root"""
             msg = msg if msg else "Need to be root"
             if os.geteuid() != 0:
-                print("You're not root. Buffer cache will not be dropped between run. Take the result with caution.", file=sys.stderr)
+                print(
+                    "You're not root. Buffer cache will not be dropped between run. Take the result with caution.",
+                    file=sys.stderr,
+                )
             return True
-        
+
         result = _check_root("Test message")
         assert result is True  # Should always return True (just warns if not root)
 
     def test_create_level_entries(self):
         """Test helper function for creating directory entries"""
         with tempfile.TemporaryDirectory() as temp_dir:
-            entries_count, dirs = msrsync3._create_level_entries(
-                temp_dir, max_entries=10, files_pct=50
-            )
+            entries_count, dirs = msrsync3._create_level_entries(temp_dir, max_entries=10, files_pct=50)
             assert entries_count >= 0
             assert isinstance(dirs, list)
             # Check that created directories exist
@@ -61,11 +63,7 @@ class TestBenchmarks:
         """Test fake tree creation for benchmarking"""
         with tempfile.TemporaryDirectory() as temp_dir:
             total_created = msrsync3._create_fake_tree(
-                temp_dir,
-                total_entries=50,
-                max_entries_per_level=10,
-                max_depth=3,
-                files_pct=70
+                temp_dir, total_entries=50, max_entries_per_level=10, max_depth=3, files_pct=70
             )
             assert total_created >= 0
             # Verify some entries were created
@@ -74,50 +72,40 @@ class TestBenchmarks:
 
     def test_compare_trees_identical(self):
         """Test tree comparison for identical trees"""
-        with tempfile.TemporaryDirectory() as temp_dir1, \
-             tempfile.TemporaryDirectory() as temp_dir2:
+        with tempfile.TemporaryDirectory() as temp_dir1, tempfile.TemporaryDirectory() as temp_dir2:
             # Create identical content in both directories
             for i in range(3):
                 with open(os.path.join(temp_dir1, f"file{i}.txt"), 'w') as f:
                     f.write(f"content{i}")
                 with open(os.path.join(temp_dir2, f"file{i}.txt"), 'w') as f:
                     f.write(f"content{i}")
-            
+
             result = msrsync3._compare_trees(temp_dir1, temp_dir2)
             assert result is True
 
     def test_compare_trees_different(self):
         """Test tree comparison for different trees"""
-        with tempfile.TemporaryDirectory() as temp_dir1, \
-             tempfile.TemporaryDirectory() as temp_dir2:
+        with tempfile.TemporaryDirectory() as temp_dir1, tempfile.TemporaryDirectory() as temp_dir2:
             # Create different content in directories
             with open(os.path.join(temp_dir1, "file1.txt"), 'w') as f:
                 f.write("content1")
             with open(os.path.join(temp_dir2, "file2.txt"), 'w') as f:
                 f.write("content2")
-            
+
             result = msrsync3._compare_trees(temp_dir1, temp_dir2)
-            # Note: The function has a bug and may not work correctly, 
+            # Note: The function has a bug and may not work correctly,
             # but we're testing the logic that was moved from main script
             # The _compare_trees function in original had bugs too
             assert isinstance(result, bool)
 
-    @pytest.mark.integration 
+    @pytest.mark.integration
     @pytest.mark.skipif(os.geteuid() != 0, reason="Requires root privileges")
     def test_bench_small_dataset(self):
         """Test benchmark with small dataset - requires root"""
-        with tempfile.TemporaryDirectory() as temp_src, \
-             tempfile.TemporaryDirectory() as temp_dst:
+        with tempfile.TemporaryDirectory() as temp_src, tempfile.TemporaryDirectory() as temp_dst:
             # Run benchmark with very small dataset
             try:
-                msrsync3.bench(
-                    total_entries=10,
-                    max_entries_per_level=5,
-                    max_depth=2,
-                    files_pct=80,
-                    src=temp_src,
-                    dst=temp_dst
-                )
+                msrsync3.bench(total_entries=10, max_entries_per_level=5, max_depth=2, files_pct=80, src=temp_src, dst=temp_dst)
             except SystemExit as e:
                 # Benchmark may exit with error codes, that's expected
                 pass
@@ -127,12 +115,7 @@ class TestBenchmarks:
     def test_benchshm_small_dataset(self):
         """Test shared memory benchmark with small dataset"""
         try:
-            msrsync3.benchshm(
-                total_entries=10,
-                max_entries_per_level=5,
-                max_depth=2,
-                files_pct=80
-            )
+            msrsync3.benchshm(total_entries=10, max_entries_per_level=5, max_depth=2, files_pct=80)
         except SystemExit as e:
             # Benchmark may exit with error codes, that's expected
             pass
@@ -148,13 +131,21 @@ def run_benchmark_suite():
     # Check if we're root for full benchmarking
     if os.geteuid() != 0:
         print("Warning: Not running as root. Some benchmark tests will be skipped.", file=sys.stderr)
-    
+
     # Run only benchmark tests
-    result = subprocess.run([
-        sys.executable, '-m', 'pytest', '-v', '-m', 'integration',
-        os.path.join(os.path.dirname(__file__), 'test_benchmarks.py')
-    ], capture_output=False)
-    
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-m',
+            'pytest',
+            '-v',
+            '-m',
+            'integration',
+            os.path.join(os.path.dirname(__file__), 'test_benchmarks.py'),
+        ],
+        capture_output=False,
+    )
+
     return result.returncode
 
 
@@ -163,10 +154,12 @@ def benchmark_performance(total_entries=10000, max_entries_per_level=128, max_de
     Run performance benchmarks
     Extracted from the main msrsync3 script
     """
+
     def _run_or_die(cmd):
         """helper"""
         ret, _, stderr, timeout, elapsed = msrsync3.run(cmd, timeout_sec=900)
-        if ret == 666:
+        if ret == msrsync3.EMSRSYNC_INTERRUPTED:
+            print("Benchmark interrupted by user", file=sys.stderr)
             sys.exit(msrsync3.EMSRSYNC_INTERRUPTED)
         if ret != 0 or timeout:
             print(f"Problem running {cmd}, aborting benchmark: {stderr}", file=sys.stderr)

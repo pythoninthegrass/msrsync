@@ -14,8 +14,7 @@ def run_all_tests():
     os.chdir(test_dir)
 
     # Run pytest with verbose output
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '.'],
-                          capture_output=False)
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '.'], capture_output=False)
     return result.returncode
 
 

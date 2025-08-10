@@ -22,6 +22,7 @@ def import_msrsync3():
 
     # Create a module object
     import types
+
     msrsync3 = types.ModuleType('msrsync3')
     msrsync3.__file__ = msrsync3_path
 

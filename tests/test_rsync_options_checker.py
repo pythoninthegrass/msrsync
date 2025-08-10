@@ -13,12 +13,13 @@ class TestRsyncOptionsChecker:
     """
     Test the rsync options checker
     """
+
     def setup_method(self):
-        """ pytest setup """
+        """pytest setup"""
         _check_executables()
 
     def test_rsync_wrong_options(self):
-        """ test with wrong_options """
+        """test with wrong_options"""
         with pytest.raises(SystemExit) as excinfo:
             rsync_options = "--this-is-fake"
             _check_rsync_options(rsync_options)
