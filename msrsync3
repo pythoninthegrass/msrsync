@@ -6,7 +6,7 @@
 #    "humanize>=4.12.3",
 # ]
 # [tool.uv]
-# exclude-newer = "2025-07-21T00:00:00Z"
+# exclude-newer = "2025-08-11T00:00:00Z"
 # ///
 
 # pyright: reportMissingImports=false
