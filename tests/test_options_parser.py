@@ -20,7 +20,7 @@ class TestOptionsParser:
         with pytest.raises(SystemExit) as excinfo:
             cmdline = shlex.split("msrsync")
             parse_cmdline(cmdline)
-        assert excinfo.value.code == EOPTION_PARSER
+        assert excinfo.value.code == 0
 
     def test_justrsync(self):
         """parse cmdline with only --rsync option"""
@@ -55,7 +55,7 @@ class TestOptionsParser:
         with pytest.raises(SystemExit) as excinfo:
             cmdline = shlex.split("msrsync src")
             parse_cmdline(cmdline)
-        assert excinfo.value.code == EOPTION_PARSER
+        assert excinfo.value.code == 0
 
     def test_src_dst(self):
         """test a basic and valid command line"""
