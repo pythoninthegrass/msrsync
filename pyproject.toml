@@ -3,7 +3,10 @@ name = "msrsync"
 version = "0.1.0"
 requires-python = ">=3.13"
 
-dependencies = []
+dependencies = [
+    "humanize>=4.12.3",
+    "sysrsync>=1.1.1",
+]
 
 [project.optional-dependencies]
 dev = [
