@@ -50,7 +50,6 @@ import time
 import timeit
 import traceback
 from multiprocessing.managers import SyncManager
-from pathlib import Path
 
 RSYNC_EXE = None
 (
@@ -126,17 +125,14 @@ def _atoi(v):
 
 
 def _tty_width():
-    if not hasattr(sys.stderr, "fileno"):
-        return _atoi(os.environ.get('WIDTH')) or 70
-    s = struct.pack("HHHH", 0, 0, 0, 0)
     try:
         import fcntl
         import termios
 
-        s = fcntl.ioctl(sys.stderr.fileno(), termios.TIOCGWINSZ, s)
-    except (OSError, ImportError):
+        s = fcntl.ioctl(sys.stderr.fileno(), termios.TIOCGWINSZ, struct.pack("HHHH", 0, 0, 0, 0))
+        return struct.unpack('HHHH', s)[1] or 70
+    except (OSError, ImportError, AttributeError):
         return _atoi(os.environ.get('WIDTH')) or 70
-    return struct.unpack('HHHH', s)[1] or 70
 
 
 class Options:
@@ -267,21 +263,17 @@ def crawl(path, relative=False):
     root_size = len(path) if relative else 0
     for root, dirs, files in os.walk(path, onerror=onerror):
         if not dirs and not files:
-            rpath = root[root_size:]
             try:
-                yield os.lstat(root).st_size, rpath
+                yield os.lstat(root).st_size, root[root_size:]
             except OSError as err:
                 print_message(f"msrsync crawl: {err}", MSG_STDERR)
                 continue
         dir_links = [d for d in dirs if os.path.islink(os.path.join(root, d))]
         for name in itertools.chain(files, dir_links):
-            fullpath = os.path.join(root, name)
             try:
-                size = os.lstat(fullpath).st_size
+                yield os.lstat(os.path.join(root, name)).st_size, os.path.join(root, name)[root_size:]
             except OSError as err:
                 print_message(f"msrsync crawl: {err}", MSG_STDERR)
-                continue
-            yield size, fullpath[root_size:]
 
 
 def buckets(path, filesnr, size):
@@ -384,31 +376,38 @@ def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize
 
 def run_tracked(cmd, proc_tracker, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize):
     try:
-        stdout_p = subprocess.PIPE if capture_stdout else None
-        stderr_p = subprocess.PIPE if capture_stderr else None
-        proc = subprocess.Popen(shlex.split(cmd), stdout=stdout_p, stderr=stderr_p, preexec_fn=os.setpgrp)
-        if proc_tracker is not None:
+        proc = subprocess.Popen(
+            shlex.split(cmd),
+            stdout=subprocess.PIPE if capture_stdout else None,
+            stderr=subprocess.PIPE if capture_stderr else None,
+            preexec_fn=os.setpgrp,
+        )
+        if proc_tracker:
             proc_tracker["proc"] = proc
         timeout = {"value": False}
         timer = threading.Timer(timeout_sec, kill_proc, [proc, timeout])
         starttime = time.time()
         timer.start()
         stdout, stderr = proc.communicate()
-        stdout = stdout or ""
-        stderr = stderr or ""
         timer.cancel()
         elapsed = time.time() - starttime
-        if proc_tracker is not None:
+        if proc_tracker:
             proc_tracker["proc"] = None
+        return (
+            proc.returncode,
+            (stdout or b"").decode('utf-8', 'replace'),
+            (stderr or b"").decode('utf-8', 'replace'),
+            timeout["value"],
+            elapsed,
+        )
     except OSError as err:
         return -1, "", f"Cannot launch {cmd}: {err}", False, 0
     except KeyboardInterrupt:
         if 'timer' in vars():
             timer.cancel()
-        if proc:
-            proc.stdout and proc.stdout.close()
-            proc.stderr and proc.stderr.close()
-        if proc:
+        if 'proc' in vars():
+            [stream.close() for stream in [proc.stdout, proc.stderr] if stream]
+        if 'proc' in vars():
             try:
                 os.killpg(proc.pid, signal.SIGTERM)
                 time.sleep(0.1)
@@ -418,16 +417,9 @@ def run_tracked(cmd, proc_tracker, capture_stdout=False, capture_stderr=False, t
                 time.sleep(0.1)
                 proc.kill()
             proc.wait()
-        if proc_tracker is not None:
+        if proc_tracker:
             proc_tracker["proc"] = None
         return EMSRSYNC_INTERRUPTED, "", "Interrupted", False, 0
-    return (
-        proc.returncode,
-        stdout.decode('utf-8', 'replace') if stdout else "",
-        stderr.decode('utf-8', 'replace') if stderr else "",
-        timeout["value"],
-        elapsed,
-    )
 
 
 def which(program):
@@ -691,12 +683,12 @@ def multiprocess_mgr_init():
 def show_stats(msrsync_stat):
     s = msrsync_stat
     status = "SUCCESS" if s["errors"] == 0 else f"FAILURE, {s['errors']} rsync processe(s) had errors"
+    buckets_nr = s["buckets_nr"]
     print("Status:", status)
     print("Working directory:", os.getcwd())
     print("Command line:", " ".join(sys.argv))
     print(f"Total size: {get_human_size(s['total_size'])}")
     print(f"Total entries: {s['total_entries']}")
-    buckets_nr = s["buckets_nr"]
     print(f"Buckets number: {buckets_nr}")
     if buckets_nr > 0:
         print(f"Mean entries per bucket: {int((s['total_entries'] * 1.0) / buckets_nr)}")
@@ -815,14 +807,11 @@ def msrsync(options, srcs, dest):
 
 def _check_executables():
     global RSYNC_EXE
-    exes, paths = ["rsync"], {}
-    for exe in exes:
-        prog = which(exe)
-        if not prog:
-            print(f"Cannot find '{exe}' executable in PATH.", file=sys.stderr)
-            sys.exit(EBIN_NOTFOUND)
-        paths[exe] = prog
-    RSYNC_EXE = paths["rsync"]
+    prog = which("rsync")
+    if not prog:
+        print("Cannot find 'rsync' executable in PATH.", file=sys.stderr)
+        sys.exit(EBIN_NOTFOUND)
+    RSYNC_EXE = prog
 
 
 def _check_srcs_dest(srcs, dest):
@@ -876,16 +865,12 @@ def _create_fake_tree(cwd, total_entries, max_entries_per_level, max_depth, file
 
 
 def _compare_trees(first, second):
-    first_list = [cur for _, cur in crawl(first, relative=True)]
-    first_list.sort()
-    second_list = [cur for _, cur in crawl(second, relative=True)]
-    second_list.sort()
+    first_list = sorted([cur for _, cur in crawl(first, relative=True)])
+    second_list = sorted([cur for _, cur in crawl(second, relative=True)])
     return first_list == second_list
 
 
 def selftest():
-    import subprocess
-
     test_runner_path = os.path.join(os.path.dirname(__file__), 'tests', 'run_tests.py')
     if os.path.exists(test_runner_path):
         subprocess.call([sys.executable, test_runner_path])
