@@ -4,7 +4,6 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #    "humanize>=4.12.3",
-#    "sysrsync>=1.1.1",
 # ]
 # [tool.uv]
 # exclude-newer = "2025-07-21T00:00:00Z"
@@ -34,7 +33,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import sysrsync
 import tempfile
 import threading
 import time
@@ -43,7 +41,7 @@ import traceback
 from multiprocessing.managers import SyncManager
 from pathlib import Path
 
-RSYNC_EXE = "rsync"  # Compatibility - sysrsync handles actual detection
+RSYNC_EXE = None
 (
     EOPTION_PARSER,
     EBUCKET_DIR_NOEXIST,
@@ -138,7 +136,7 @@ def _valid_rsync_options(rsync_opts):
     for opt in rsync_opts.split():
         if opt.startswith("--delete"):
             print("Cannot use --delete option type with msrsync. It would lead to disaster :)", file=sys.stderr)
-            sys.exit(97)
+            sys.exit(EOPTION_PARSER)
 
 
 class CustomArgumentParser(argparse.ArgumentParser):
@@ -277,52 +275,100 @@ def consume_queue(jobs_queue):
         yield item
 
 
+def kill_proc(proc, timeout):
+    timeout["value"] = True
+    with contextlib.suppress(OSError, ProcessLookupError):
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            time.sleep(0.1)
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            proc.terminate()
+            time.sleep(0.1)
+            proc.kill()
+
+
 def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize):
-    """Compatibility function for tests - simplified subprocess runner"""
+    return run_tracked(cmd, None, capture_stdout, capture_stderr, timeout_sec)
+
+
+def run_tracked(cmd, proc_tracker, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize):
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             shlex.split(cmd),
             stdout=subprocess.PIPE if capture_stdout else None,
             stderr=subprocess.PIPE if capture_stderr else None,
-            timeout=timeout_sec if timeout_sec != sys.maxsize else None,
-            text=True,
+            preexec_fn=os.setpgrp,
         )
+        if proc_tracker:
+            proc_tracker["proc"] = proc
+        timeout = {"value": False}
+        timer = threading.Timer(timeout_sec, kill_proc, [proc, timeout])
+        starttime = time.time()
+        timer.start()
+        stdout, stderr = proc.communicate()
+        timer.cancel()
+        elapsed = time.time() - starttime
+        if proc_tracker:
+            proc_tracker["proc"] = None
         return (
-            result.returncode,
-            result.stdout or "",
-            result.stderr or "",
-            False,  # timeout flag
-            0,      # elapsed time (not tracked)
+            proc.returncode,
+            (stdout or b"").decode('utf-8', 'replace'),
+            (stderr or b"").decode('utf-8', 'replace'),
+            timeout["value"],
+            elapsed,
         )
-    except subprocess.TimeoutExpired:
-        return -1, "", "Command timed out", True, timeout_sec
-    except Exception as err:
-        return -1, "", str(err), False, 0
+    except OSError as err:
+        return -1, "", f"Cannot launch {cmd}: {err}", False, 0
+    except KeyboardInterrupt:
+        if 'timer' in vars():
+            timer.cancel()
+        if 'proc' in vars():
+            [stream.close() for stream in [proc.stdout, proc.stderr] if stream]
+        if 'proc' in vars():
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                time.sleep(0.1)
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.terminate()
+                time.sleep(0.1)
+                proc.kill()
+            proc.wait()
+        if proc_tracker:
+            proc_tracker["proc"] = None
+        return EMSRSYNC_INTERRUPTED, "", "Interrupted", False, 0
 
 
 def _check_rsync_options(options):
-    """Check rsync options by actually testing them"""
-    # Check for dangerous --delete options first
-    for opt in shlex.split(options) if options else []:
-        if opt.startswith("--delete"):
-            print("Cannot use --delete option type with msrsync. It would lead to disaster :)", file=sys.stderr)
-            sys.exit(ERSYNC_OPTIONS_CHECK)
-
-    # Test the options by actually running rsync with a dry run
+    rsync_cmd = None
     try:
-        with tempfile.TemporaryDirectory() as src_dir, tempfile.TemporaryDirectory() as dst_dir:
-            test_opts = shlex.split(options) if options else []
-            test_opts.extend(['--dry-run', '--quiet'])
-
-            result = sysrsync.run(source=src_dir, destination=dst_dir, options=test_opts, strict=False, verbose=False)
-
-            if result.returncode != 0:
-                print(f'Error during rsync options check ("{options}"): rsync returned {result.returncode}', file=sys.stderr)
-                sys.exit(ERSYNC_OPTIONS_CHECK)
-
-    except Exception as err:
-        print(f'Error during rsync options check ("{options}"): {err}', file=sys.stderr)
+        src, dst = tempfile.mkdtemp(), tempfile.mkdtemp()
+        rsync_log_fd, rsync_log = tempfile.mkstemp()
+        rsync_cmd = f"{RSYNC_EXE} {options + ' --quiet --stats --verbose --from0 --log-file ' + rsync_log} {src + os.sep} {dst}"
+        ret, _, stderr, timeout, _ = run(rsync_cmd, timeout_sec=60)
+        if timeout:
+            print(f'Error during rsync options check command "{rsync_cmd}": took more than 60 seconds !', file=sys.stderr)
+            sys.exit(ERSYNC_OPTIONS_CHECK)
+        elif ret != 0:
+            print(f'Error during rsync options check command "{rsync_cmd}": {2 * os.linesep + stderr}', file=sys.stderr)
+            sys.exit(ERSYNC_OPTIONS_CHECK)
+    except OSError as err:
+        msg = (
+            f'Error during rsync options check command "{rsync_cmd}": {2 * os.linesep + str(err)}'
+            if rsync_cmd
+            else f'Error during rsync options check ("{options}"): {2 * os.linesep + str(err)}'
+        )
+        print(msg, file=sys.stderr)
         sys.exit(ERSYNC_OPTIONS_CHECK)
+    finally:
+        try:
+            os.rmdir(src)
+            os.rmdir(dst)
+            os.close(rsync_log_fd)
+            os.remove(rsync_log)
+        except OSError:
+            pass
 
 
 def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
@@ -331,47 +377,38 @@ def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
 
 def run_rsync_tracked(files_from, rsync_opts, src, dest, proc_tracker, timeout=3600 * 24 * 7):
     rsync_log = files_from + '.log'
-    rsync_result = dict(rcode=-1, msg=None, cmdline="", log=rsync_log)
-
+    rsync_cmd = f'{RSYNC_EXE} {rsync_opts} --quiet --verbose --stats --from0 --files-from={files_from} --log-file={rsync_log} "{src}" "{dest}"'
+    rsync_result = dict(rcode=-1, msg=None, cmdline=rsync_cmd, log=rsync_log)
     try:
-        starttime = time.time()
-
-        # Parse rsync options into list
-        options = shlex.split(rsync_opts) if rsync_opts else []
-        # Add required msrsync options
-        options.extend(['--quiet', '--verbose', '--stats', '--from0', f'--files-from={files_from}', f'--log-file={rsync_log}'])
-
-        # Use sysrsync to run the command
-        result = sysrsync.run(
-            source=src,
-            destination=dest,
-            options=options,
-            strict=False,   # Don't raise exception on non-zero exit
-            verbose=False,  # We handle our own logging
-        )
-
-        elapsed = time.time() - starttime
-        rsync_result.update(rcode=result.returncode, elapsed=elapsed, cmdline=f"rsync {' '.join(options)} {src} {dest}")
-
-        if result.returncode != 0:
+        ret, _, _, timeout, elapsed = run_tracked(rsync_cmd, proc_tracker, timeout_sec=timeout)
+        rsync_result.update(rcode=ret, elapsed=elapsed)
+        if timeout:
+            rsync_result["errcode"] = ERSYNC_TOO_LONG
+        elif ret != 0:
             rsync_result["errcode"] = ERSYNC_JOB
-
-    except Exception as err:
+    except OSError as err:
         rsync_result.update(errcode=ERSYNC_JOB, msg=str(err))
-
     return rsync_result
 
 
-def rsync_worker(jobs_queue, monitor_queue, options, dest):
-    # Process tracker not needed with sysrsync
+def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     current_rsync_proc = {"proc": None}
 
     def worker_signal_handler(signum, frame):
-        # Note: sysrsync handles process management, but we still need signal handling
+        if current_rsync_proc["proc"]:
+            try:
+                os.killpg(current_rsync_proc["proc"].pid, signal.SIGTERM)
+                time.sleep(0.1)
+                os.killpg(current_rsync_proc["proc"].pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                current_rsync_proc["proc"].terminate()
+                current_rsync_proc["proc"].kill()
         sys.exit(1)
 
     signal.signal(signal.SIGINT, worker_signal_handler)
     signal.signal(signal.SIGTERM, worker_signal_handler)
+    global RSYNC_EXE
+    RSYNC_EXE = rsync_exe
     try:
         for src, files_from, bucket_files_nr, bucket_size in consume_queue(jobs_queue):
             rsync_result = (
@@ -518,7 +555,7 @@ def messages_worker(options, messages_queue):
 
 def start_rsync_workers(jobs_queue, monitor_queue, options, dest):
     processes = [
-        multiprocessing.Process(target=rsync_worker, args=(jobs_queue, monitor_queue, options, dest))
+        multiprocessing.Process(target=rsync_worker, args=(jobs_queue, monitor_queue, options, dest, RSYNC_EXE))
         for _ in range(options.processes)
     ]
     for p in processes:
@@ -672,13 +709,27 @@ def msrsync(options, srcs, dest):
         options.buckets is not None and not options.keep and shutil.rmtree(options.buckets, onerror=rmtree_onerror)
 
 
+def which(program):
+    def is_exe(fpath):
+        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+
+    fpath, _ = os.path.split(program)
+    if fpath:
+        return program if is_exe(program) else None
+    for path in os.environ["PATH"].split(os.pathsep):
+        exe_file = os.path.join(path, program)
+        if is_exe(exe_file):
+            return exe_file
+    return None
+
+
 def _check_executables():
-    """Check if rsync is available - sysrsync will handle binary detection"""
-    try:
-        sysrsync.get_rsync_command(source=".", destination=".")
-    except Exception as err:
-        print(f"Cannot find 'rsync' executable or sysrsync error: {err}", file=sys.stderr)
+    global RSYNC_EXE
+    prog = which("rsync")
+    if not prog:
+        print("Cannot find 'rsync' executable in PATH.", file=sys.stderr)
         sys.exit(EBIN_NOTFOUND)
+    RSYNC_EXE = prog
 
 
 def _check_srcs_dest(srcs, dest):
