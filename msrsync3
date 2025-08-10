@@ -558,19 +558,37 @@ def consume_queue(jobs_queue):
 def kill_proc(proc, timeout):
     """helper function for run"""
     timeout["value"] = True
-    with contextlib.suppress(OSError):
-        proc.terminate()
-        time.sleep(0.1)
-        proc.kill()
+    with contextlib.suppress(OSError, ProcessLookupError):
+        # Try to kill the entire process group first
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            time.sleep(0.1)
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            # Fallback to single process termination
+            proc.terminate()
+            time.sleep(0.1)
+            proc.kill()
 
 
 # http://stackoverflow.com/questions/1191374/subprocess-with-timeout
 def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize):
     """run function with a timeout"""
+    return run_tracked(cmd, None, capture_stdout, capture_stderr, timeout_sec)
+
+
+def run_tracked(cmd, proc_tracker, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize):
+    """run function with a timeout and process tracking"""
     try:
         stdout_p = subprocess.PIPE if capture_stdout else None
         stderr_p = subprocess.PIPE if capture_stderr else None
-        proc = subprocess.Popen(shlex.split(cmd), stdout=stdout_p, stderr=stderr_p)
+        # Create subprocess in new process group to ensure proper signal handling
+        proc = subprocess.Popen(shlex.split(cmd), stdout=stdout_p, stderr=stderr_p, preexec_fn=os.setpgrp)
+
+        # Track process if tracker provided
+        if proc_tracker is not None:
+            proc_tracker["proc"] = proc
+
         timeout = {"value": False}
         timer = threading.Timer(timeout_sec, kill_proc, [proc, timeout])
         starttime = time.time()
@@ -582,6 +600,11 @@ def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize
             stderr = ""
         timer.cancel()
         elapsed = time.time() - starttime
+
+        # Clear process tracker when done
+        if proc_tracker is not None:
+            proc_tracker["proc"] = None
+
     except OSError as err:
         return -1, "", f"Cannot launch {cmd}: {err}", False, 0
     except KeyboardInterrupt:
@@ -592,11 +615,20 @@ def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize
                 proc.stdout.close()
             if proc.stderr:
                 proc.stderr.close()
-            # Terminate the process
-            proc.terminate()
-            time.sleep(0.1)
-            proc.kill()
+            # Terminate the entire process group
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                time.sleep(0.1)
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                # Fallback to single process termination
+                proc.terminate()
+                time.sleep(0.1)
+                proc.kill()
             proc.wait()
+        # Clear process tracker on interrupt
+        if proc_tracker is not None:
+            proc_tracker["proc"] = None
         return EMSRSYNC_INTERRUPTED, "", "Interrupted", False, 0
 
     return (
@@ -669,6 +701,13 @@ def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
     """
     Perform rsync using the --files-from option
     """
+    return run_rsync_tracked(files_from, rsync_opts, src, dest, None, timeout)
+
+
+def run_rsync_tracked(files_from, rsync_opts, src, dest, proc_tracker, timeout=3600 * 24 * 7):
+    """
+    Perform rsync using the --files-from option with process tracking
+    """
     rsync_log = files_from + '.log'
     rsync_cmd = f'{RSYNC_EXE} {rsync_opts} --quiet --verbose --stats --from0 --files-from={files_from} --log-file={rsync_log} "{src}" "{dest}"'
     rsync_result = dict()
@@ -678,7 +717,7 @@ def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
     rsync_result["log"] = rsync_log
 
     try:
-        ret, _, _, timeout, elapsed = run(rsync_cmd, timeout_sec=timeout)
+        ret, _, _, timeout, elapsed = run_tracked(rsync_cmd, proc_tracker, timeout_sec=timeout)
 
         rsync_result["rcode"] = ret
         rsync_result["elapsed"] = elapsed
@@ -700,9 +739,25 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     The queue will contains filenames of file to handle by individual rsync processes
     """
 
+    # Track current rsync process for signal handling
+    current_rsync_proc = {"proc": None}
+
+    def worker_signal_handler(signum, frame):
+        """Handle signals in worker process by terminating any running rsync"""
+        if current_rsync_proc["proc"]:
+            try:
+                os.killpg(current_rsync_proc["proc"].pid, signal.SIGTERM)
+                time.sleep(0.1)
+                os.killpg(current_rsync_proc["proc"].pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                # Fallback to single process termination
+                current_rsync_proc["proc"].terminate()
+                current_rsync_proc["proc"].kill()
+        raise KeyboardInterrupt()
+
     # Set up signal handlers in worker process
-    signal.signal(signal.SIGINT, signal.SIG_DFL)
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, worker_signal_handler)
+    signal.signal(signal.SIGTERM, worker_signal_handler)
 
     # Set the global RSYNC_EXE for this worker process
     global RSYNC_EXE
@@ -711,7 +766,7 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     try:
         for src, files_from, bucket_files_nr, bucket_size in consume_queue(jobs_queue):
             if not options.dry_run:
-                rsync_result = run_rsync(files_from, options.rsync, src, dest)
+                rsync_result = run_rsync_tracked(files_from, options.rsync, src, dest, current_rsync_proc)
             else:
                 rsync_result = dict(rcode=0, elapsed=0, errcode=0, msg='')
             rsync_mon_result = {
