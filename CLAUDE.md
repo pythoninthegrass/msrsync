@@ -5,42 +5,57 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Common Development Commands
 
 ### Testing
-```bash
-# Run embedded unit tests
-make test
-# or directly:
-./msrsync --selftest
 
+```bash
+# TODO: migrate to taskfile
+# Run embedded unit tests
+# make test
+# or directly:
+./msrsync3 --selftest
+
+# TODO: migrate to taskfile
 # Run coverage analysis
-make cov
-make covhtml  # Generate HTML coverage report
+# make cov
+# make covhtml  # Generate HTML coverage report
+
+# Run tests via uv
+uv run pytest tests/ -v -m "not integration"  # Run unit tests
+uv run pytest tests/ -v -m "integration"      # Run integration tests (requires rsync and multiprocessing)
 ```
 
 ### Code Quality
 ```bash
+# TODO: migrate to taskfile
 # Run linting
-make lint
-# This executes: pylint --disable=too-many-lines,line-too-long msrsync
+# make lint
 ```
 
 ### Installation
 ```bash
+# TODO: migrate to taskfile
 # Install to /usr/bin (or DESTDIR environment variable)
-make install
+# make install
 ```
 
 ### Benchmarking
 ```bash
-# Run benchmarks (Linux only, requires root)
-make bench
-make benchshm  # Run benchmarks in /dev/shm
+# Run benchmark tests (requires root for full functionality)
+uv run python tests/test_benchmarks.py
+
+# Run integration tests including benchmarks
+uv run pytest tests/ -v -m "integration"
+
+# Run performance benchmarking functions directly
+uv run python -c "from tests.test_benchmarks import benchmark_performance; benchmark_performance(total_entries=1000)"
+uv run python -c "from tests.test_benchmarks import benchmark_shm; benchmark_shm(total_entries=1000)"
 ```
 
 ## Architecture Overview
 
 msrsync is a single-file Python utility that wraps rsync to enable parallel file transfers. The codebase consists of two main scripts:
-- `msrsync`: Python 2.6+ compatible version (primary)
 - `msrsync3`: Python 3 version
+- `msrsync`: Python 2.6+ compatible version (deprecated)
+  - Ignore this version entirely outside of reference implementation
 
 ### Core Design Patterns
 
@@ -48,7 +63,7 @@ msrsync is a single-file Python utility that wraps rsync to enable parallel file
 
 2. **Message Queue System**: Coordinates output between multiple processes using a central monitor process that handles progress reporting and error collection.
 
-3. **Embedded Testing**: All unit tests are embedded within the main script and can be run via `--selftest`.
+3. **Separated Testing**: Unit tests are in the `tests/` directory and can be run via `--selftest` or directly with pytest. Benchmarking has been moved to `tests/test_benchmarks.py`.
 
 ### Key Components
 
@@ -61,12 +76,16 @@ msrsync is a single-file Python utility that wraps rsync to enable parallel file
 
 - Does not support remote source/destination directories (local paths only)
 - Default rsync options: `-aS --numeric-ids`
-- Python 2.6+ compatibility is maintained for RHEL6 support
-- No external dependencies except rsync itself
 
 ## Development Notes
 
-- The project is marked as not actively developed in README.md
-- When modifying, ensure Python 2.6 compatibility for the main script
+- When testing synced files/directories, always use `/tmp` as the parent directory
+  - e.g., `/tmp/test_src`, `/tmp/test_dest`
 - Error codes are defined as constants (EMSRSYNC_*) at the top of the script
 - All functionality is contained in a single file to simplify deployment
+- Use `uv run` for all virtual environment calls
+- Lint python files with
+  - `ruff check <FILE> --unsafe-fixes --fix --diff`
+  - `ruff format <FILE>`
+- Respect `.editorconfig` settings
+- Use `markdownlint -c .markdownlint.jsonc <MARKDOWN_FILE>` when editing markdown
