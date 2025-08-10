@@ -350,6 +350,7 @@ class BucketError(RuntimeError):
     """
     Exception for bucket related error
     """
+
     pass
 
 
@@ -689,10 +690,18 @@ def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
     return rsync_result
 
 
-def rsync_worker(jobs_queue, monitor_queue, options, dest):
+def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     """
     The queue will contains filenames of file to handle by individual rsync processes
     """
+
+    # Set up signal handlers in worker process
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    
+    # Set the global RSYNC_EXE for this worker process
+    global RSYNC_EXE
+    RSYNC_EXE = rsync_exe
 
     try:
         for src, files_from, bucket_files_nr, bucket_size in consume_queue(jobs_queue):
@@ -746,6 +755,10 @@ def rsync_monitor_worker(
     """
     The monitor queue contains messages from the rsync workers
     """
+
+    # Set up signal handlers in worker process
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     current_size = 0
     current_files_nr = 0
     current_elapsed = 0
@@ -825,6 +838,10 @@ def messages_worker(options, messages_queue):
     This queue will contains messages to be print of the screen
     """
 
+    # Set up signal handlers in worker process
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+
     last_msg_type = cur_msg_type = None
     try:
         for result in consume_queue(messages_queue):
@@ -855,7 +872,7 @@ def start_rsync_workers(jobs_queue, monitor_queue, options, dest):
     """
     processes = []
     for _ in range(options.processes):
-        processes.append(multiprocessing.Process(target=rsync_worker, args=(jobs_queue, monitor_queue, options, dest)))
+        processes.append(multiprocessing.Process(target=rsync_worker, args=(jobs_queue, monitor_queue, options, dest, RSYNC_EXE)))
         processes[-1].start()
     return processes
 
@@ -943,6 +960,14 @@ def msrsync(options, srcs, dest):
     manager = SyncManager()
     manager.start()
 
+    # Set up signal handlers to ensure clean shutdown
+    def signal_handler(signum, frame):
+        """Handle interrupt signals by raising KeyboardInterrupt"""
+        raise KeyboardInterrupt()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     total_size = manager.Value('i', 0)
     total_files_nr = manager.Value('i', 0)
     crawl_time = manager.Value('f', 0)
@@ -1006,15 +1031,32 @@ def msrsync(options, srcs, dest):
         return run_stats["errors"]
 
     except (KeyboardInterrupt, SystemExit):
+        print("\nInterrupted! Terminating processes...", file=sys.stderr)
+
+        # Terminate all worker processes
         for worker in rsync_workers_procs:
             worker.terminate()
-            worker.join()
 
+        # Terminate monitor and message processes
         rsync_monitor_worker_proc.terminate()
-        rsync_monitor_worker_proc.join()
-
         messages_worker_proc.terminate()
-        messages_worker_proc.join()
+
+        # Wait for all processes to finish with timeout
+        for worker in rsync_workers_procs:
+            worker.join(timeout=5.0)
+            if worker.is_alive():
+                worker.kill()  # Force kill if still alive
+
+        rsync_monitor_worker_proc.join(timeout=5.0)
+        if rsync_monitor_worker_proc.is_alive():
+            rsync_monitor_worker_proc.kill()
+
+        messages_worker_proc.join(timeout=5.0)
+        if messages_worker_proc.is_alive():
+            messages_worker_proc.kill()
+
+        # Return interrupted error code
+        return EMSRSYNC_INTERRUPTED
     except BucketError as err:
         print(err, file=sys.stderr)
     except Exception:
@@ -1183,7 +1225,6 @@ def main(cmdline):
         selftest()
         sys.exit(0)
 
-
     _check_executables()
     _check_srcs_dest(srcs, dest)
     _check_rsync_options(options.rsync)
@@ -1191,5 +1232,10 @@ def main(cmdline):
 
 
 if __name__ == '__main__':
-    with contextlib.suppress(KeyboardInterrupt, SystemExit):
+    try:
         sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        print("\nInterrupted by user", file=sys.stderr)
+        sys.exit(EMSRSYNC_INTERRUPTED)
+    except SystemExit:
+        raise
