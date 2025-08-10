@@ -1,6 +1,5 @@
 {
   "recommendations": [
-    "aaron-bond.better-comments",
     "charliermarsh.ruff",
     "codezombiech.gitignore",
     "DavidAnson.vscode-markdownlint",
