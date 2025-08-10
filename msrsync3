@@ -1,4 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env -S uv run --script
+
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#    "humanize>=4.12.3",
+#    "sysrsync>=1.1.1",
+# ]
+# [tool.uv]
+# exclude-newer = "2025-07-21T00:00:00Z"
+# ///
+
+# pyright: reportMissingImports=false
 
 # Copyright 2017 Jean-Baptiste Denis <jbd@jbdenis.net>
 # This program is free software; you can redistribute it and/or modify it
