@@ -753,7 +753,8 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
                 # Fallback to single process termination
                 current_rsync_proc["proc"].terminate()
                 current_rsync_proc["proc"].kill()
-        raise KeyboardInterrupt()
+        # Exit gracefully without raising KeyboardInterrupt to avoid traceback
+        sys.exit(1)
 
     # Set up signal handlers in worker process
     signal.signal(signal.SIGINT, worker_signal_handler)
@@ -780,9 +781,13 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        jobs_queue.put(StopIteration)
-        # we insert a sentinel value to inform the monitor this process fnished
-        monitor_queue.put({"type": TYPE_RSYNC_SENTINEL, "pid": os.getpid()})
+        try:
+            jobs_queue.put(StopIteration)
+            # we insert a sentinel value to inform the monitor this process fnished
+            monitor_queue.put({"type": TYPE_RSYNC_SENTINEL, "pid": os.getpid()})
+        except (OSError, BrokenPipeError, ConnectionResetError, EOFError):
+            # Queue manager may have been shut down during signal handling
+            pass
 
 
 def handle_rsync_error_result(rsync_result, messages_queue):
@@ -791,22 +796,25 @@ def handle_rsync_error_result(rsync_result, messages_queue):
     """
     msg = rsync_result["msg"] or ''
 
-    if rsync_result["errcode"] == ERSYNC_TOO_LONG:
-        messages_queue.put(
-            {
-                "type": MSG_STDERR,
-                "message": f"rsync command took too long and has been killed (see '{rsync_result['log']}' rsync log file): {msg}\n{rsync_result['cmdline']}",
-            }
-        )
-    elif rsync_result["errcode"] == ERSYNC_JOB:
-        messages_queue.put(
-            {
-                "type": MSG_STDERR,
-                "message": f"errors during rsync command (see '{rsync_result['log']}' rsync log file): {msg}\n{rsync_result['cmdline']}",
-            }
-        )
-    else:
-        messages_queue.put({"type": MSG_STDERR, "message": f"unknown rsync_result status: {rsync_result}"})
+    try:
+        if rsync_result["errcode"] == ERSYNC_TOO_LONG:
+            messages_queue.put(
+                {
+                    "type": MSG_STDERR,
+                    "message": f"rsync command took too long and has been killed (see '{rsync_result['log']}' rsync log file): {msg}\n{rsync_result['cmdline']}",
+                }
+            )
+        elif rsync_result["errcode"] == ERSYNC_JOB:
+            messages_queue.put(
+                {
+                    "type": MSG_STDERR,
+                    "message": f"errors during rsync command (see '{rsync_result['log']}' rsync log file): {msg}\n{rsync_result['cmdline']}",
+                }
+            )
+        else:
+            messages_queue.put({"type": MSG_STDERR, "message": f"unknown rsync_result status: {rsync_result}"})
+    except (OSError, BrokenPipeError, ConnectionResetError, EOFError):
+        pass
 
 
 def rsync_monitor_worker(
@@ -837,12 +845,13 @@ def rsync_monitor_worker(
                 rsync_workers_stops += 1
                 continue
             if result["type"] != TYPE_RSYNC:
-                messages_queue.put(
-                    {
-                        "type": MSG_STDERR,
-                        "message": f"rsync_monitor_worker process received an incompatile type message: {result}",
-                    }
-                )
+                with contextlib.suppress(OSError, BrokenPipeError, ConnectionResetError, EOFError):
+                    messages_queue.put(
+                        {
+                            "type": MSG_STDERR,
+                            "message": f"rsync_monitor_worker process received an incompatile type message: {result}",
+                        }
+                    )
                 continue
 
             rsync_result = result["rsync_result"]
@@ -863,17 +872,22 @@ def rsync_monitor_worker(
             entries_per_second = current_files_nr / current_elapsed if current_elapsed > 0 else 0
 
             if options.progress:
-                messages_queue.put(
-                    {
-                        "type": MSG_PROGRESS,
-                        "message": f"[{current_files_nr}/{total_files_nr.value} entries] [{get_human_size(current_size)}/{get_human_size(total_size.value)} transferred] [{entries_per_second} entries/s] [{get_human_size(bytes_per_second)}/s bw] [monq {monitor_queue.qsize()}] [jq {result['jq_size']}]",
-                    }
-                )
+                with contextlib.suppress(OSError, BrokenPipeError, ConnectionResetError, EOFError):
+                    messages_queue.put(
+                        {
+                            "type": MSG_PROGRESS,
+                            "message": f"[{current_files_nr}/{total_files_nr.value} entries] [{get_human_size(current_size)}/{get_human_size(total_size.value)} transferred] [{entries_per_second} entries/s] [{get_human_size(bytes_per_second)}/s bw] [monq {monitor_queue.qsize()}] [jq {result['jq_size']}]",
+                        }
+                    )
 
         if rsync_errors > 0:
-            messages_queue.put(
-                {"type": MSG_STDERR, "message": "\nmsrsync error: somes files/attr were not transferred (see previous errors)"}
-            )
+            with contextlib.suppress(OSError, BrokenPipeError, ConnectionResetError, EOFError):
+                messages_queue.put(
+                    {
+                        "type": MSG_STDERR,
+                        "message": "\nmsrsync error: somes files/attr were not transferred (see previous errors)",
+                    }
+                )
 
         stats = dict()
         stats["errors"] = rsync_errors
@@ -887,7 +901,8 @@ def rsync_monitor_worker(
         stats["crawl_time"] = crawl_time.value
         stats["total_time"] = total_time.value
 
-        monitor_queue.put(stats)
+        with contextlib.suppress(OSError, BrokenPipeError, ConnectionResetError, EOFError):
+            monitor_queue.put(stats)
 
     except (KeyboardInterrupt, SystemExit):
         pass

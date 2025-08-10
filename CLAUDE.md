@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Testing
 
+#### Synthetic
+
+- Synthetic tests should always last long enough with enough files to reproduce real world conditions
+  - `create_test_directory(src_dir, num_files=1000, size=102400)`  # 1000 files, 100KB each
+  - Let it run for a bit: `time.sleep(0.5)`
+
 ```bash
 # TODO: migrate to taskfile
 # Run embedded unit tests
@@ -23,7 +29,15 @@ uv run pytest tests/ -v -m "not integration"  # Run unit tests
 uv run pytest tests/ -v -m "integration"      # Run integration tests (requires rsync and multiprocessing)
 ```
 
+#### Organic
+
+- Run on the Beelink ME mini via `ssh me-mini`
+  - `msrsync` is symlinked to `~/git/msrsync/msrsync3`
+- Avoid interactive terminal issues: 
+  - `ssh me-mini "/root/.local/share/mise/installs/python/3.13.5/bin/python /root/git/msrsync/msrsync3 -p 4 -P -s 2G /mnt/synology-shares/ /mnt/user/shares/`
+
 ### Code Quality
+
 ```bash
 # TODO: migrate to taskfile
 # Run linting
@@ -31,6 +45,7 @@ uv run pytest tests/ -v -m "integration"      # Run integration tests (requires 
 ```
 
 ### Installation
+
 ```bash
 # TODO: migrate to taskfile
 # Install to /usr/bin (or DESTDIR environment variable)
@@ -38,6 +53,7 @@ uv run pytest tests/ -v -m "integration"      # Run integration tests (requires 
 ```
 
 ### Benchmarking
+
 ```bash
 # Run benchmark tests (requires root for full functionality)
 uv run python tests/test_benchmarks.py
