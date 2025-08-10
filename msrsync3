@@ -215,7 +215,8 @@ def parse_cmdline(cmdline_argv):
 
         # Validate paths
         if not args.paths or len(args.paths) < 2:
-            parser.error('You must provide a source and a destination')
+            parser.print_usage()
+            sys.exit(0)
 
         srcs, dest = args.paths[:-1], args.paths[-1]
 
