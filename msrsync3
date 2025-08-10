@@ -115,11 +115,6 @@ STDOUT_ENCODING = sys.stdout.encoding if None else 'utf8'
 
 PY2 = sys.version_info[0] == 2
 
-if PY2:
-    FILE_WRITE_MODE='wb'
-else:
-    FILE_WRITE_MODE='w'
-
 
 def _e(value):
     # pylint: disable=invalid-name
@@ -680,14 +675,22 @@ def write_bucket(filename, bucket, compress=False):
     try:
         fileno, path = filename
         if not compress:
-            with os.fdopen(fileno, FILE_WRITE_MODE) as bfile:
+            with os.fdopen(fileno, 'wb') as bfile:  # Always use binary mode
                 for entry in bucket:
-                    bfile.write(entry + '\0')
+                    # Encode with surrogateescape to handle invalid UTF-8 sequences
+                    if PY2:
+                        bfile.write(entry + '\0')
+                    else:
+                        bfile.write((entry + '\0').encode('utf-8', 'surrogateescape'))
         else:
             os.close(fileno)
-            with gzip.open(path, FILE_WRITE_MODE) as bfile:
+            with gzip.open(path, 'wb') as bfile:  # Always use binary mode
                 for entry in bucket:
-                    bfile.write(entry)
+                    # Encode with surrogateescape to handle invalid UTF-8 sequences
+                    if PY2:
+                        bfile.write(entry)
+                    else:
+                        bfile.write(entry.encode('utf-8', 'surrogateescape'))
     except IOError as err:
         raise BucketError("Cannot write bucket file %s: %s" % (path, err))
 
