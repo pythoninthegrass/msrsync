@@ -559,6 +559,8 @@ def kill_proc(proc, timeout):
     """helper function for run"""
     timeout["value"] = True
     with contextlib.suppress(OSError):
+        proc.terminate()
+        time.sleep(0.1)
         proc.kill()
 
 
@@ -590,9 +592,12 @@ def run(cmd, capture_stdout=False, capture_stderr=False, timeout_sec=sys.maxsize
                 proc.stdout.close()
             if proc.stderr:
                 proc.stderr.close()
+            # Terminate the process
             proc.terminate()
+            time.sleep(0.1)
+            proc.kill()
             proc.wait()
-        return 666, "", "Interrupted", False, 0
+        return EMSRSYNC_INTERRUPTED, "", "Interrupted", False, 0
 
     return (
         proc.returncode,
@@ -698,7 +703,7 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
     # Set up signal handlers in worker process
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
-    
+
     # Set the global RSYNC_EXE for this worker process
     global RSYNC_EXE
     RSYNC_EXE = rsync_exe
@@ -1033,27 +1038,41 @@ def msrsync(options, srcs, dest):
     except (KeyboardInterrupt, SystemExit):
         print("\nInterrupted! Terminating processes...", file=sys.stderr)
 
-        # Terminate all worker processes
-        for worker in rsync_workers_procs:
-            worker.terminate()
+        # Flush output streams before redirecting
+        sys.stdout.flush()
+        sys.stderr.flush()
 
-        # Terminate monitor and message processes
-        rsync_monitor_worker_proc.terminate()
-        messages_worker_proc.terminate()
+        # Temporarily redirect stderr to suppress rsync error messages during cleanup
+        original_stderr = sys.stderr
 
-        # Wait for all processes to finish with timeout
-        for worker in rsync_workers_procs:
-            worker.join(timeout=5.0)
-            if worker.is_alive():
-                worker.kill()  # Force kill if still alive
+        with open(os.devnull, 'w') as devnull:
+            sys.stderr = devnull
 
-        rsync_monitor_worker_proc.join(timeout=5.0)
-        if rsync_monitor_worker_proc.is_alive():
-            rsync_monitor_worker_proc.kill()
+            try:
+                # Terminate all worker processes
+                for worker in rsync_workers_procs:
+                    worker.terminate()
 
-        messages_worker_proc.join(timeout=5.0)
-        if messages_worker_proc.is_alive():
-            messages_worker_proc.kill()
+                # Terminate monitor and message processes
+                rsync_monitor_worker_proc.terminate()
+                messages_worker_proc.terminate()
+
+                # Wait for all processes to finish with timeout
+                for worker in rsync_workers_procs:
+                    worker.join(timeout=2.0)
+                    if worker.is_alive():
+                        worker.kill()
+
+                rsync_monitor_worker_proc.join(timeout=2.0)
+                if rsync_monitor_worker_proc.is_alive():
+                    rsync_monitor_worker_proc.kill()
+
+                messages_worker_proc.join(timeout=2.0)
+                if messages_worker_proc.is_alive():
+                    messages_worker_proc.kill()
+            finally:
+                # Restore stderr
+                sys.stderr = original_stderr
 
         # Return interrupted error code
         return EMSRSYNC_INTERRUPTED
