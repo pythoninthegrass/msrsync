@@ -1,30 +1,23 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
-import unittest
-from test_helpers import TestHelpers
-from test_options_parser import TestOptionsParser
-from test_rsync_options_checker import TestRsyncOptionsChecker
-from test_sync_api import TestSyncAPI
-from test_sync_cli import TestSyncCLI
+import os
+import subprocess
+import sys
 
 
 def run_all_tests():
     """
-    Run all test suites
+    Run all test suites using pytest
     """
-    suite = unittest.TestSuite()
+    # Change to the tests directory
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(test_dir)
 
-    tests = [TestHelpers,
-             TestOptionsParser,
-             TestRsyncOptionsChecker,
-             TestSyncAPI,
-             TestSyncCLI]
-
-    for test in tests:
-        suite.addTest(unittest.TestLoader().loadTestsFromTestCase(test))
-
-    unittest.TextTestRunner(verbosity=2).run(suite)
+    # Run pytest with verbose output
+    result = subprocess.run([sys.executable, '-m', 'pytest', '-v', '.'],
+                          capture_output=False)
+    return result.returncode
 
 
 if __name__ == '__main__':
-    run_all_tests()
+    sys.exit(run_all_tests())

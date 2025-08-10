@@ -60,9 +60,10 @@ python_files = "test_*.py"
 python_functions = "test_*"
 python_classes = "Test*"
 asyncio_mode = "auto"
+addopts = "-v --tb=short"
 markers = [
     "unit: marks tests as unit tests",
-    "integration: marks tests as integration tests",
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "e2e: marks tests as end-to-end tests",
     "benchmark: marks performance benchmark tests"
 ]
