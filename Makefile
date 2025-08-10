@@ -15,8 +15,8 @@ help:
 	@echo "  bench		=> run benchmarks (linux only. Need root to drop buffer cache between run)"
 	@echo "  benchshm	=> run benchmarks using /dev/shm (linux only. Need root to drop buffer cache between run)"
 
-install: msrsync
-	install -m 0755 msrsync $(DESTDIR)/bin
+install: msrsync3
+	install -m 0755 msrsync3 $(DESTDIR)/bin
 
 clean:
 	@find . -name \*.pyc -delete
@@ -26,8 +26,8 @@ clean:
 .check_cov:
 	@$(COVERAGE) --version
 
-.coverage: msrsync .check_cov
-	@$(COVERAGE) run ./msrsync --selftest
+.coverage: msrsync3 .check_cov
+	@$(COVERAGE) run ./msrsync3 --selftest
 
 cov: .coverage
 	@$(COVERAGE) report -m
@@ -40,13 +40,13 @@ man:
 	@true
 
 lint:
-	pylint --disable=too-many-lines,line-too-long msrsync || :
+	pylint --disable=too-many-lines,line-too-long msrsync3 || :
 
 test:
-	@./msrsync --selftest
+	@./msrsync3 --selftest
 
 bench:
-	@./msrsync --bench
+	@./msrsync3 --bench
 
 benchshm:
-	@./msrsync --benchshm
+	@./msrsync3 --benchshm
