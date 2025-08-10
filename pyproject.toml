@@ -63,6 +63,9 @@ python_functions = "test_*"
 python_classes = "Test*"
 asyncio_mode = "auto"
 addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore:'asyncio.get_event_loop_policy' is deprecated:DeprecationWarning:pytest_asyncio.plugin"
+]
 markers = [
     "unit: marks tests as unit tests",
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
