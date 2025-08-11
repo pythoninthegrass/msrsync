@@ -4,6 +4,7 @@
 # requires-python = ">=3.14"
 # dependencies = [
 #    "humanize>=4.12.3",
+#    "sh>=2.2.2",
 # ]
 # [tool.uv]
 # exclude-newer = "2025-08-11T00:00:00Z"
@@ -23,7 +24,6 @@ DEFAULT_RSYNC_OPTIONS = "-aS --numeric-ids"
 import argparse
 import contextlib
 import gzip
-import humanize
 import itertools
 import multiprocessing
 import os
@@ -97,6 +97,26 @@ def get_human_size(num, power="B"):
     return f"{num:.1f} {power}"
 
 
+def get_cache_exclusion_patterns():
+    """Get cache exclusion patterns for both crawl and rsync."""
+    cache_dirs = {
+        '.cache',
+        '.DocumentRevisions-V100',
+        '.fcpcache',
+        '.fseventsd',
+        '.Spotlight-V100',
+        '.temp',
+        '.TemporaryItems',
+        '.tmp',
+        '.Trashes',
+    }
+    cache_extensions = {'.tmp', '.temp', '.cache', '.swp', '.swo'}
+    cache_files = {'.DS_Store', 'Thumbs.db'}
+    temp_patterns = {'.#*', '#*', '*~'}
+
+    return cache_dirs, cache_extensions, cache_files, temp_patterns
+
+
 def should_skip_file(name, cache_files, cache_extensions):
     """Determine if a file should be skipped based on cache patterns."""
     match name:
@@ -114,26 +134,11 @@ def crawl(path, relative=False, exclude_caches=False):
     def onerror(oserror):
         print_message(f"msrsync crawl: {oserror}", MSG_STDERR)
 
-    # Cache directory patterns to skip
-    cache_dirs = (
-        {
-            '.cache',
-            '.DocumentRevisions-V100',
-            '.fcpcache',
-            '.fseventsd',
-            '.Spotlight-V100',
-            '.temp',
-            '.TemporaryItems',
-            '.tmp',
-            '.Trashes',
-        }
-        if exclude_caches
-        else set()
-    )
-
-    # Cache file patterns to skip
-    cache_extensions = {'.tmp', '.temp', '.cache', '.swp', '.swo'} if exclude_caches else set()
-    cache_files = {'.DS_Store', 'Thumbs.db'} if exclude_caches else set()
+    # Get cache patterns if exclude_caches is enabled
+    if exclude_caches:
+        cache_dirs, cache_extensions, cache_files, _ = get_cache_exclusion_patterns()
+    else:
+        cache_dirs = cache_extensions = cache_files = set()
 
     root_size = len(path) if relative else 0
     for root, dirs, files in os.walk(path, onerror=onerror):
@@ -159,10 +164,44 @@ def crawl(path, relative=False, exclude_caches=False):
                 print_message(f"msrsync crawl: {err}", MSG_STDERR)
 
 
+def crawl_with_fd(path, relative=False, exclude_caches=False):
+    """Fast crawl using fd - drop-in replacement for crawl()"""
+    try:
+        from sh import fd as fd_cmd
+        root_size = len(path) if relative else 0
+
+        # Get cache patterns if exclude_caches is enabled
+        if exclude_caches:
+            cache_dirs, cache_extensions, cache_files, _ = get_cache_exclusion_patterns()
+        else:
+            cache_dirs = cache_extensions = cache_files = set()
+
+        for line in fd_cmd('--type', 'f', '--absolute-path', '.', _cwd=path, _iter=True):
+            fullpath = line.strip()
+
+            # Skip cache files when exclude_caches is enabled
+            if exclude_caches:
+                name = os.path.basename(fullpath)
+                if should_skip_file(name, cache_files, cache_extensions):
+                    continue
+
+            try:
+                size = os.lstat(fullpath).st_size
+                rpath = fullpath[root_size:] if relative else fullpath
+                yield size, rpath
+            except OSError as err:
+                print_message(f"fd crawl: {err}", MSG_STDERR)
+
+    except Exception as err:
+        print_message(f"fd failed, using os.walk: {err}", MSG_STDERR)
+        # Fallback to original crawl
+        yield from crawl(path, relative, exclude_caches)
+
+
 def buckets(path, filesnr, size, exclude_caches=False):
     bucket_files_nr = bucket_size = 0
     bucket, base = [], os.path.split(path)[1]
-    for fsize, rpath in crawl(path, relative=True, exclude_caches=exclude_caches):
+    for fsize, rpath in crawl_with_fd(path, relative=True, exclude_caches=exclude_caches):
         bucket.append(os.path.join(base, rpath.lstrip(os.sep)))
         bucket_files_nr += 1
         bucket_size += fsize
@@ -414,13 +453,42 @@ def _check_rsync_options(options):
             pass
 
 
-def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7):
-    return run_rsync_tracked(files_from, rsync_opts, src, dest, None, timeout)
+def build_rsync_exclude_options(exclude_caches):
+    """Build rsync exclude options for cache patterns."""
+    if not exclude_caches:
+        return ""
+
+    cache_dirs, cache_extensions, cache_files, temp_patterns = get_cache_exclusion_patterns()
+
+    exclude_opts = []
+    # Exclude cache directories
+    for dir_pattern in cache_dirs:
+        exclude_opts.append(f'--exclude=**/{dir_pattern}/')
+        exclude_opts.append(f'--exclude=**/{dir_pattern}')
+
+    # Exclude cache file extensions
+    for ext in cache_extensions:
+        exclude_opts.append(f'--exclude=**/*{ext}')
+
+    # Exclude specific cache files
+    for file_pattern in cache_files:
+        exclude_opts.append(f'--exclude=**/{file_pattern}')
+
+    # Exclude temp file patterns
+    for pattern in temp_patterns:
+        exclude_opts.append(f'--exclude={pattern}')
+
+    return ' '.join(exclude_opts)
 
 
-def run_rsync_tracked(files_from, rsync_opts, src, dest, proc_tracker, timeout=3600 * 24 * 7):
+def run_rsync(files_from, rsync_opts, src, dest, timeout=3600 * 24 * 7, exclude_caches=False):
+    return run_rsync_tracked(files_from, rsync_opts, src, dest, None, timeout, exclude_caches)
+
+
+def run_rsync_tracked(files_from, rsync_opts, src, dest, proc_tracker, timeout=3600 * 24 * 7, exclude_caches=False):
     rsync_log = files_from + '.log'
-    rsync_cmd = f'{RSYNC_EXE} {rsync_opts} --quiet --verbose --stats --from0 --files-from={files_from} --log-file={rsync_log} "{src}" "{dest}"'
+    exclude_opts = build_rsync_exclude_options(exclude_caches)
+    rsync_cmd = f'{RSYNC_EXE} {rsync_opts} {exclude_opts} --quiet --verbose --stats --from0 --files-from={files_from} --log-file={rsync_log} "{src}" "{dest}"'
     rsync_result = dict(rcode=-1, msg=None, cmdline=rsync_cmd, log=rsync_log)
     try:
         ret, _, _, timeout, elapsed = run_tracked(rsync_cmd, proc_tracker, timeout_sec=timeout)
@@ -457,7 +525,9 @@ def rsync_worker(jobs_queue, monitor_queue, options, dest, rsync_exe):
             rsync_result = (
                 dict(rcode=0, elapsed=0, errcode=0, msg='')
                 if options.dry_run
-                else run_rsync_tracked(files_from, options.rsync, src, dest, current_rsync_proc)
+                else run_rsync_tracked(
+                    files_from, options.rsync, src, dest, current_rsync_proc, exclude_caches=options.exclude_caches
+                )
             )
             monitor_queue.put(
                 {
@@ -839,8 +909,8 @@ def _create_fake_tree(cwd, total_entries, max_entries_per_level, max_depth, file
 
 
 def _compare_trees(first, second):
-    first_list = sorted([cur for _, cur in crawl(first, relative=True)])
-    second_list = sorted([cur for _, cur in crawl(second, relative=True)])
+    first_list = sorted([cur for _, cur in crawl_with_fd(first, relative=True)])
+    second_list = sorted([cur for _, cur in crawl_with_fd(second, relative=True)])
     return first_list == second_list
 
 

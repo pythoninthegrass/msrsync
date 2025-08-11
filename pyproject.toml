@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 
 dependencies = [
     "humanize>=4.12.3",
+    "sh>=2.2.2",
 ]
 
 [project.optional-dependencies]
