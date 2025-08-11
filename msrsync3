@@ -514,9 +514,19 @@ def rsync_monitor_worker(
                 continue
             rsync_result = result["rsync_result"]
             if rsync_result["rcode"] != 0:
-                rsync_errors += 1
-                handle_rsync_error_result(rsync_result, messages_queue)
-                continue
+                # Exit code 24 is "some files vanished" - treat as warning not error
+                if rsync_result["rcode"] == 24:
+                    with contextlib.suppress(OSError, BrokenPipeError, ConnectionResetError, EOFError):
+                        messages_queue.put(
+                            {
+                                "type": MSG_STDERR,
+                                "message": "rsync warning: some files vanished before they could be transferred (code 24) - this is usually harmless for cache/temporary files",
+                            }
+                        )
+                else:
+                    rsync_errors += 1
+                    handle_rsync_error_result(rsync_result, messages_queue)
+                    continue
             buckets_nr += 1
             current_size += result["size"]
             current_files_nr += result["files_nr"]
