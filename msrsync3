@@ -533,7 +533,7 @@ def rsync_monitor_worker(
                         messages_queue.put(
                             {
                                 "type": MSG_STDERR,
-                                "message": "rsync warning: some files vanished before they could be transferred (code 24) - this is usually harmless for cache/temporary files",
+                                "message": "rsync warning: vanished files (code 24)",
                             }
                         )
                 else:
