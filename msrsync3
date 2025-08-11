@@ -170,6 +170,7 @@ Examples:
     parser.add_argument('--stats', action='store_true', help='show additional stats')
     parser.add_argument('-d', '--dry-run', action='store_true', help='do not run rsync processes')
     parser.add_argument('-v', '--version', action='store_true', help='print version')
+    parser.add_argument('--exclude-caches', action='store_true', help='exclude common cache and temporary files')
 
     # rsync options
     parser.add_argument(
@@ -338,6 +339,35 @@ def run_tracked(cmd, proc_tracker, capture_stdout=False, capture_stderr=False, t
         if proc_tracker:
             proc_tracker["proc"] = None
         return EMSRSYNC_INTERRUPTED, "", "Interrupted", False, 0
+
+
+def _build_rsync_options(options):
+    """Build rsync options including cache exclusions if requested."""
+    rsync_opts = options.rsync
+
+    if options.exclude_caches:
+        # Common cache and temporary file patterns to exclude
+        cache_excludes = [
+            '--exclude=.fcpcache/',
+            '--exclude=*.tmp',
+            '--exclude=*.temp',
+            '--exclude=*.cache',
+            '--exclude=.DS_Store',
+            '--exclude=Thumbs.db',
+            '--exclude=.Spotlight-V100/',
+            '--exclude=.Trashes/',
+            '--exclude=.fseventsd/',
+            '--exclude=.TemporaryItems/',
+            '--exclude=.DocumentRevisions-V100/',
+            '--exclude=*.swp',
+            '--exclude=*.swo',
+            '--exclude=*~',
+            '--exclude=.#*',
+            '--exclude=#*#',
+        ]
+        rsync_opts = rsync_opts + ' ' + ' '.join(cache_excludes)
+
+    return rsync_opts
 
 
 def _check_rsync_options(options):
@@ -810,7 +840,11 @@ def main(cmdline):
         sys.exit(0)
     _check_executables()
     _check_srcs_dest(srcs, dest)
+
+    # Build rsync options with cache exclusions if requested
+    options.rsync = _build_rsync_options(options)
     _check_rsync_options(options.rsync)
+
     return msrsync(options, srcs, dest)
 
 
