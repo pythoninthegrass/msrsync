@@ -5,6 +5,7 @@ requires-python = ">=3.13"
 
 dependencies = [
     "humanize>=4.12.3",
+    "psutil>=7.0.0",
     "sh>=2.2.2",
 ]
 
@@ -15,6 +16,7 @@ dev = [
     "icecream<3.0.0,>=2.1.3",
     "ipython<9.0.0,>=8.27.0",
     "mypy<2.0.0,>=1.14.1",
+    "psutil>=7.0.0",
     "pyclean<4.0.0,>=3.0.0",
     "pytest-asyncio<1.0.0,>=0.25.2",
     "pytest-cov<7.0.0,>=6.0.0",

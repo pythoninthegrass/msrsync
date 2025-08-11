@@ -58,6 +58,9 @@ uv run pytest tests/ -v -m "integration"      # Run integration tests (requires 
 # Run benchmark tests (requires root for full functionality)
 uv run python tests/test_benchmarks.py
 
+# Run benchmarks with specific source and destination and create test data
+uv run python tests/test_benchmarks.py --source /tmp/large_test --dest /tmp/dest_test --create-data 50000
+
 # Run integration tests including benchmarks
 uv run pytest tests/ -v -m "integration"
 
