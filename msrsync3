@@ -168,6 +168,7 @@ def crawl_with_fd(path, relative=False, exclude_caches=False):
     """Fast crawl using fd - drop-in replacement for crawl()"""
     try:
         from sh import fd as fd_cmd
+
         root_size = len(path) if relative else 0
 
         # Get cache patterns if exclude_caches is enabled
@@ -785,9 +786,23 @@ def msrsync(options, srcs, dest):
                 except OSError as err:
                     print_message(f'msrsync scan: cannot create temporary bucket file: "{err}"', MSG_STDERR)
                     continue
-                write_bucket((fileno, filename), bucket, options.compress)
-                bucket_nr += 1
-                jobs_queue.put((src_base, filename, bucket_files_nr, bucket_size))
+                try:
+                    write_bucket((fileno, filename), bucket, options.compress)
+                    bucket_nr += 1
+                    jobs_queue.put((src_base, filename, bucket_files_nr, bucket_size))
+                except BucketError as err:
+                    print_message(f'msrsync scan: {err}', MSG_STDERR)
+                    # Clean up the failed bucket file
+                    with contextlib.suppress(OSError):
+                        os.close(fileno)
+                    with contextlib.suppress(OSError):
+                        os.unlink(filename)
+                    # Check if it's a disk space issue and abort if so
+                    if "[Errno 28]" in str(err) or "No space left on device" in str(err):
+                        raise RuntimeError(
+                            f"Aborting: Out of disk space while writing bucket files in {options.buckets}"
+                        ) from err
+                    continue
         crawl_time.value = timeit.default_timer() - crawl_start
         jobs_queue.put(StopIteration)
         for worker in rsync_workers_procs:
@@ -825,6 +840,30 @@ def msrsync(options, srcs, dest):
         return EMSRSYNC_INTERRUPTED
     except BucketError as err:
         print(err, file=sys.stderr)
+    except RuntimeError as err:
+        # Handle out of space errors gracefully
+        print(err, file=sys.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        # Terminate all worker processes
+        original_stderr = sys.stderr
+        with open(os.devnull, 'w') as devnull:
+            sys.stderr = devnull
+            try:
+                for worker in rsync_workers_procs:
+                    worker.terminate()
+                rsync_monitor_worker_proc.terminate()
+                messages_worker_proc.terminate()
+                for worker in rsync_workers_procs:
+                    worker.join(timeout=2.0)
+                    worker.is_alive() and worker.kill()
+                rsync_monitor_worker_proc.join(timeout=2.0)
+                rsync_monitor_worker_proc.is_alive() and rsync_monitor_worker_proc.kill()
+                messages_worker_proc.join(timeout=2.0)
+                messages_worker_proc.is_alive() and messages_worker_proc.kill()
+            finally:
+                sys.stderr = original_stderr
+        return EBUCKET_DIR_OSERROR
     except Exception:
         print("Uncaught exception:" + os.linesep + traceback.format_exc(), file=sys.stderr)
     finally:
