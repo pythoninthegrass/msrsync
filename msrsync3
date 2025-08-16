@@ -177,8 +177,8 @@ def crawl_with_fd(path, relative=False, exclude_caches=False):
         else:
             cache_dirs = cache_extensions = cache_files = set()
 
-        for line in fd_cmd('--type', 'f', '--absolute-path', '--color=never', '.', _cwd=path, _iter=True, _encoding='utf-8', _decode_errors='surrogateescape'):
-            fullpath = line.strip()
+        for line in fd_cmd('--type', 'f', '--absolute-path', '--color=never', '--print0', '.', _cwd=path, _iter=True, _encoding='utf-8', _decode_errors='surrogateescape'):
+            fullpath = line.rstrip('\0')
 
             # Skip cache files when exclude_caches is enabled
             if exclude_caches:
@@ -191,6 +191,18 @@ def crawl_with_fd(path, relative=False, exclude_caches=False):
                 rpath = fullpath[root_size:] if relative else fullpath
                 yield size, rpath
             except OSError as err:
+                # Try to handle encoding issues by checking if file exists with different encoding
+                try:
+                    # Encode to bytes and decode with different error handling
+                    fullpath_bytes = fullpath.encode('utf-8', 'surrogateescape')
+                    fullpath_alt = fullpath_bytes.decode('utf-8', 'replace')
+                    if os.path.exists(fullpath_alt):
+                        size = os.lstat(fullpath_alt).st_size
+                        rpath = fullpath_alt[root_size:] if relative else fullpath_alt
+                        yield size, rpath
+                        continue
+                except (OSError, UnicodeError):
+                    pass
                 print_message(f"fd crawl: {err}", MSG_STDERR)
 
     except Exception as err:
