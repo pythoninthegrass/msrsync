@@ -177,7 +177,7 @@ def crawl_with_fd(path, relative=False, exclude_caches=False):
         else:
             cache_dirs = cache_extensions = cache_files = set()
 
-        for line in fd_cmd('--type', 'f', '--absolute-path', '--color=never', '.', _cwd=path, _iter=True):
+        for line in fd_cmd('--type', 'f', '--absolute-path', '--color=never', '.', _cwd=path, _iter=True, _encoding='utf-8', _decode_errors='surrogateescape'):
             fullpath = line.strip()
 
             # Skip cache files when exclude_caches is enabled
